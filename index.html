@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emotionware | Emotion Analytics Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body {
+            background: #F4A4C0;
+            min-height: 100vh;
+            color: #023568;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid #FFF76B;
+            transition: all 0.3s ease;
+        }
+        .glass-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .accent-text { color: #FFF76B; }
+        .modern-button {
+            padding: 0.6rem 1.25rem;
+            background: rgba(103,178,216,0.15);
+            border: 1px solid rgba(103,178,216,0.3);
+            border-radius: 0.75rem;
+            color: #67B2D8;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+        .modern-button:hover {
+            background: #67B2D8;
+            color: #403f3e;
+        }
+    </style>
+</head>
+
+<body class="p-6 md:p-12 font-sans">
+
+<header class="max-w-7xl mx-auto mb-10 flex justify-between items-center">
+    <h1 class="text-4xl font-black tracking-tight">
+        EMOTION<span class="accent-text">WARE</span>
+    </h1>
+    <span class="text-xs uppercase tracking-widest opacity-60">
+        Real-Time Emotion Intelligence
+    </span>
+</header>
+
+<main class="max-w-7xl mx-auto space-y-8">
+
+    <!-- TOP STATS -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+        <div class="glass-card rounded-3xl p-8">
+            <h2 class="text-xs font-bold uppercase tracking-widest opacity-60 mb-2">Welcome, User!</h2>
+            <div class="text-lg font-bold accent-text" id="sessionId">Loading…</div>
+            <div class="text-xs font-bold opacity-60 mt-2" id="sessionTime">—</div>
+        </div>
+
+        <div class="glass-card rounded-3xl p-8">
+            <h2 class="text-xs font-bold uppercase tracking-widest opacity-60 mb-2">Dominant Emotion</h2>
+            <div class="text-3xl font-black accent-text" id="dominantEmotion">—</div>
+            <div class="text-sm font-bold opacity-60 mt-2">
+                Avg Stability: <span id="avgStability">—</span>
+            </div>
+        </div>
+
+        <div class="glass-card rounded-3xl p-8 border-l-4 border-l-[#67B2D8]">
+            <h2 class="text-xs font-bold uppercase tracking-widest opacity-60 mb-2">System Status</h2>
+            <div class="text-sm">Camera Glasses: <strong id="cameraStatus">Connected</strong></div>
+            <div class="text-sm">Wearable: <strong id="arduinoStatus">Connected</strong></div>
+            <div class="text-xs font-bold opacity-60 mt-2">
+                Last Emotion Sent: <span id="lastSent">—</span>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- AI SUMMARY -->
+    <div class="glass-card rounded-3xl p-8">
+        <h2 class="text-xl font-bold mb-4">AI Session Summary</h2>
+        <p id="aiSummary" class="text-sm font-bold opacity-80 italic">
+            Analyzing emotional trends for this session with Google Gemini...
+        </p>
+    </div>
+
+    <!-- EMOTION TABLE -->
+    <div class="glass-card rounded-3xl p-6 overflow-hidden">
+        <h2 class="text-xl font-bold mb-4">Emotion Log</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+                <thead class="opacity-60 border-b border-white/10">
+                    <tr>
+                        <th class="py-2">Timestamp</th>
+                        <th>Face ID</th>
+                        <th>Emotion</th>
+                        <th>Stability</th>
+                    </tr>
+                </thead>
+                <tbody id="emotionTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ACTIONS -->
+    <div class="flex gap-4">
+        <button class="modern-button ">Download CSV</button>
+        <button class="modern-button">End Session</button>
+    </div>
+
+</main>
+
+<script>
+const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vROLvu8MGfuDHLgX9LKS3PbA0S4ZfZKxxO1BqEweUNueu-EN8mp9KaW0NM-RolXJq3CIYFJdKhxPBqA/pub?gid=0&single=true&output=csv";
+const SUMMARY_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vROLvu8MGfuDHLgX9LKS3PbA0S4ZfZKxxO1BqEweUNueu-EN8mp9KaW0NM-RolXJq3CIYFJdKhxPBqA/pub?gid=2074802677&single=true&output=csv";
+
+async function loadSessionSummary() {
+    try {
+        const res = await fetch(SUMMARY_URL);
+        const text = await res.text();
+        const firstRow = text.trim().split("\n")[0];  // first line
+        const firstCell = firstRow.split(",")[0];     // first column (A1)
+        document.getElementById("aiSummary").innerText = firstCell || "No summary yet.";
+    } catch (error) {
+        console.error("Error loading summary:", error);
+        document.getElementById("aiSummary").innerText = "Error loading summary.";
+    }
+}
+
+loadSessionSummary();
+
+async function loadEmotionData() {
+    const res = await fetch(SHEET_URL);
+    const text = await res.text();
+    const rows = text.trim().split("\n").slice(1);
+
+    let emotionCounts = {};
+    let stabilitySum = 0;
+
+    rows.forEach(row => {
+        const [time, face, emotion, affect, stability] = row.split(",");
+        emotionCounts[emotion] = (emotionCounts[emotion] || 0) + 1;
+        stabilitySum += parseFloat(stability || 0);
+
+        document.getElementById("emotionTable").innerHTML += `
+            <tr class="border-b border-white/5">
+                <td class="py-2">${time}</td>
+                <td>${face}</td>
+                <td>${emotion}</td>
+                <td>${stability}</td>
+            </tr>
+        `;
+    });
+
+    const dominant = Object.entries(emotionCounts)
+        .sort((a,b) => b[1]-a[1])[0]?.[0] || "neutral";
+
+    document.getElementById("dominantEmotion").innerText = dominant;
+    document.getElementById("avgStability").innerText =
+        (stabilitySum / rows.length).toFixed(2);
+
+    document.getElementById("sessionId").innerText = "SESSION-" + Date.now();
+    document.getElementById("sessionTime").innerText = new Date().toLocaleString();
+    document.getElementById("lastSent").innerText = dominant;
+
+    document.getElementById("aiSummary").innerText = rows[0][0];
+
+}
+
+loadEmotionData();
+</script>
+
+</body>
+</html>
