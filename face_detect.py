@@ -7,12 +7,20 @@ from deepface import DeepFace
 import serial
 import os
 import requests
+from dotenv import load_dotenv
+from collections import Counter
+import json
+
+load_dotenv()
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 USE_ARDUINO = False  # ANOTHER SWITCH!!!! test CV model or tes w/ arduino (final version))
 if USE_ARDUINO:
-    COMX = os.getenv("COM_PORT")
+    COMX = "COM5"
     ser = serial.Serial(COMX, 9600, timeout=1)
-    time.sleep(2)  # ardiuno initialization time
+    time.sleep(6)
+    print("connected:", ser.is_open)
 
 
 USE_PRESAGE = False  # THE SWITCH!!!!
@@ -59,6 +67,8 @@ face_cascade = cv2.CascadeClassifier(
 cap = cv2.VideoCapture(0)
 
 
+last_arduino_send = {} 
+SEND_INTERVAL = 5.0     
 next_face_id = 0
 faces_tracked = {}
 face_emotions = {} #tracking what specifically like which ones
@@ -152,15 +162,29 @@ while cap.isOpened():
             stability = counts / len(face_emotions_history[matched_id])
 
             affect, engagement = presage_interpret(smoothed_emotion, stability)
-            if USE_ARDUINO:
-                if stability >= 0.6:
-                    ser.write(f"{smoothed_emotion}\n".encode())  # send to arduion
+            if USE_ARDUINO and ser and ser.is_open:
+                now = time.time()
+                last_time = last_arduino_send.get(matched_id, 0)
+                if stability >= 0.6 and (now - last_time) >= SEND_INTERVAL:
+                    ser.write(f"{smoothed_emotion}\n".encode())  # send to Arduino
                     print(f"[Face {matched_id}] Sent to Arduino: {smoothed_emotion}")
+                    #CSV log
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                    csv_writer.writerow([timestamp, matched_id, smoothed_emotion, affect, round(stability, 2)])
+                    last_arduino_send[matched_id] = now
+            else:
+                now = time.time()
+                last_time = last_arduino_send.get(matched_id, 0)
+                if stability >= 0.6 and (now - last_time) >= SEND_INTERVAL:
+                    print(f"[Face {matched_id}] Sent to File: {smoothed_emotion}")
+                    #CSV log
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                    csv_writer.writerow([timestamp, matched_id, smoothed_emotion, affect, round(stability, 2)])
+                    last_arduino_send[matched_id] = now
+    
             print(f"[Face {matched_id}] Emotion: {smoothed_emotion} | Stability: {stability:.2f}")
 
-            #CSV log
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            csv_writer.writerow([timestamp, matched_id, smoothed_emotion, affect, round(stability, 2)])
+
 
 
         # last known smoothed emotion for display
@@ -218,3 +242,60 @@ while cap.isOpened():
 cap.release()
 cv2.destroyAllWindows()
 log_file.close()
+
+
+
+emotion_counts = Counter()
+total_rows = 0
+
+with open("emotion_log.csv", newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        emotion_counts[row["emotion"]] += 1
+        total_rows += 1
+
+summary_payload = {
+    "total_samples": total_rows,
+    "emotion_distribution": dict(emotion_counts)
+}
+
+prompt = f"""
+You are analyzing anonymized emotion trend data from a single session.
+
+Rules:
+- Do NOT diagnose mental health
+- Do NOT make assumptions about the person
+- Be neutral, factual, and supportive
+- 4–6 sentences max
+
+Data:
+{summary_payload}
+"""
+
+headers = {
+    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+    "Content-Type": "application/json",
+    "HTTP-Referer": "http://localhost",  # oopenrouter
+    "X-Title": "Emotionware Hackathon"
+}
+
+data = {
+    "model": "google/gemini-2.5-flash-lite",
+    "messages": [
+        {"role": "user", "content": prompt}
+    ]
+}
+
+response = requests.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    headers=headers,
+    data=json.dumps(data),
+    timeout=30
+)
+
+response.raise_for_status()
+gemini_text = response.json()["choices"][0]["message"]["content"]
+
+
+with open("session_summary.txt", "w") as f:
+    f.write(gemini_text)
